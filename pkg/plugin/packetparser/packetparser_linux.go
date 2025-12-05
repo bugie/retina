@@ -20,6 +20,7 @@ import (
 	"github.com/cilium/cilium/api/v1/flow"
 	v1 "github.com/cilium/cilium/pkg/hubble/api/v1"
 	"github.com/cilium/ebpf"
+	"github.com/cilium/ebpf/link"
 	"github.com/cilium/ebpf/perf"
 	tc "github.com/florianl/go-tc"
 	helper "github.com/florianl/go-tc/core"
@@ -93,8 +94,8 @@ func (p *packetParser) Generate(ctx context.Context) error {
 	if p.cfg.BypassLookupIPOfInterest {
 		p.l.Info("bypassing lookup IP of interest")
 		bypassLookupIPOfInterest = 1
-		st = fmt.Sprintf("#define BYPASS_LOOKUP_IP_OF_INTEREST %d\n", bypassLookupIPOfInterest)
 	}
+	st = fmt.Sprintf("#define BYPASS_LOOKUP_IP_OF_INTEREST %d\n", bypassLookupIPOfInterest)
 
 	conntrackMetrics := 0
 	// Check if packetparser has Conntrack metrics enabled.
@@ -224,8 +225,11 @@ func (p *packetParser) Init() error {
 		return err
 	}
 
-	p.tcMap = &sync.Map{}
+	p.attachmentMap = &sync.Map{}
 	p.interfaceLockMap = &sync.Map{}
+
+	// Check if TCX is supported
+	p.tcxSupported = p.isTCXSupported()
 
 	return nil
 }
@@ -342,13 +346,17 @@ func (p *packetParser) SetupChannel(ch chan *v1.Event) error {
 // Not required for now.
 func (p *packetParser) cleanAll() error {
 	// Delete tunnel and qdiscs.
-	if p.tcMap == nil {
+	if p.attachmentMap == nil {
 		return nil
 	}
 
-	p.tcMap.Range(func(key, value interface{}) bool {
-		v := value.(*tcValue)
-		p.clean(v.tc, v.qdisc)
+	p.attachmentMap.Range(func(key, value interface{}) bool {
+		v := value.(*attachmentValue)
+		if v.attachmentType == attachmentTypeTCX {
+			p.cleanTCX(v.tcxIngressLink, v.tcxEgressLink)
+		} else {
+			p.clean(v.tc, v.qdisc)
+		}
 		return true
 	})
 
@@ -356,7 +364,7 @@ func (p *packetParser) cleanAll() error {
 	// It is OK to do this without a lock because
 	// cleanAll is only invoked from Stop(), and Stop can
 	// only be called from PluginManager (which is single threaded).
-	p.tcMap = &sync.Map{}
+	p.attachmentMap = &sync.Map{}
 	return nil
 }
 
@@ -370,6 +378,113 @@ func (p *packetParser) clean(rtnl nltc, qdisc *tc.Object) {
 			p.l.Warn("could not close rtnetlink socket", zap.Error(err))
 		}
 	}
+}
+
+// cleanTCX cleans up TCX links. This is best effort.
+func (p *packetParser) cleanTCX(ingressLink, egressLink link.Link) {
+	if ingressLink != nil {
+		if err := ingressLink.Close(); err != nil {
+			p.l.Debug("could not close ingress TCX link", zap.Error(err))
+		}
+	}
+	if egressLink != nil {
+		if err := egressLink.Close(); err != nil {
+			p.l.Debug("could not close egress TCX link", zap.Error(err))
+		}
+	}
+}
+
+// isTCXSupported checks if TCX is supported by attempting to attach a test program.
+// TCX is available in kernel 6.6+.
+func (p *packetParser) isTCXSupported() bool {
+	// Check for environment variable to force TC mode
+	if os.Getenv("RETINA_FORCE_TC_MODE") == "true" {
+		p.l.Info("RETINA_FORCE_TC_MODE is set, using traditional TC instead of TCX")
+		return false
+	}
+
+	// Try to get a test interface to check TCX support
+	links, err := netlink.LinkList()
+	if err != nil || len(links) == 0 {
+		p.l.Debug("Could not list network interfaces for TCX detection", zap.Error(err))
+		return false
+	}
+
+	// Use loopback interface for testing
+	var loopback netlink.Link
+	for _, l := range links {
+		if l.Attrs().Name == "lo" {
+			loopback = l
+			break
+		}
+	}
+	if loopback == nil {
+		p.l.Debug("Loopback interface not found for TCX detection")
+		return false
+	}
+
+	// Try to attach a TCX program to check support
+	// We'll use the endpoint ingress program for testing
+	testLink, err := link.AttachTCX(link.TCXOptions{
+		Program:   p.objs.EndpointIngressFilter,
+		Attach:    ebpf.AttachTCXIngress,
+		Interface: loopback.Attrs().Index,
+	})
+	if err != nil {
+		p.l.Info("TCX not supported on this system (kernel 6.6+ required), will use traditional TC", zap.Error(err))
+		return false
+	}
+
+	// Clean up test link
+	if err := testLink.Close(); err != nil {
+		p.l.Debug("Error cleaning up TCX test link", zap.Error(err))
+	}
+	p.l.Info("TCX support detected, will use TCX for BPF program attachment")
+	return true
+}
+
+// attachTCX attaches BPF programs using TCX (TC eXpress).
+// Returns ingress link, egress link, and error.
+func (p *packetParser) attachTCX(iface netlink.LinkAttrs, ifaceType interfaceType) (link.Link, link.Link, error) {
+	var ingressProgram, egressProgram *ebpf.Program
+
+	switch ifaceType {
+	case Device:
+		ingressProgram = p.objs.HostIngressFilter
+		egressProgram = p.objs.HostEgressFilter
+	case Veth:
+		ingressProgram = p.objs.EndpointIngressFilter
+		egressProgram = p.objs.EndpointEgressFilter
+	default:
+		return nil, nil, fmt.Errorf("unknown interface type: %s", ifaceType)
+	}
+
+	// Attach ingress program
+	ingressLink, err := link.AttachTCX(link.TCXOptions{
+		Program:   ingressProgram,
+		Attach:    ebpf.AttachTCXIngress,
+		Interface: iface.Index,
+		Anchor:    link.Head(),
+	})
+	if err != nil {
+		return nil, nil, fmt.Errorf("could not attach TCX ingress program: %w", err)
+	}
+
+	// Attach egress program
+	egressLink, err := link.AttachTCX(link.TCXOptions{
+		Program:   egressProgram,
+		Attach:    ebpf.AttachTCXEgress,
+		Interface: iface.Index,
+		Anchor:    link.Head(),
+	})
+	if err != nil {
+		// Clean up ingress link if egress fails
+		ingressLink.Close()
+		return nil, nil, fmt.Errorf("could not attach TCX egress program: %w", err)
+	}
+
+	p.l.Debug("Successfully attached TCX programs", zap.String("interface", iface.Name))
+	return ingressLink, egressLink, nil
 }
 
 func (p *packetParser) endpointWatcherCallbackFn(obj interface{}) {
@@ -394,11 +509,15 @@ func (p *packetParser) endpointWatcherCallbackFn(obj interface{}) {
 	case endpoint.EndpointDeleted:
 		p.l.Debug("Endpoint deleted", zap.String("name", iface.Name))
 		// Clean.
-		if value, ok := p.tcMap.Load(ifaceKey); ok {
-			v := value.(*tcValue)
-			p.clean(v.tc, v.qdisc)
+		if value, ok := p.attachmentMap.Load(ifaceKey); ok {
+			v := value.(*attachmentValue)
+			if v.attachmentType == attachmentTypeTCX {
+				p.cleanTCX(v.tcxIngressLink, v.tcxEgressLink)
+			} else {
+				p.clean(v.tc, v.qdisc)
+			}
 			// Delete from map.
-			p.tcMap.Delete(ifaceKey)
+			p.attachmentMap.Delete(ifaceKey)
 		}
 		// Delete from lock map.
 		p.interfaceLockMap.Delete(ifaceKey)
@@ -409,10 +528,34 @@ func (p *packetParser) endpointWatcherCallbackFn(obj interface{}) {
 }
 
 // createQdiscAndAttach creates a qdisc of type clsact on the interface and attaches the ingress and egress bpf filter programs to it.
+// If TCX is supported, it will use TCX instead of traditional TC.
 // Only support interfaces of type veth and device.
 func (p *packetParser) createQdiscAndAttach(iface netlink.LinkAttrs, ifaceType interfaceType) {
-	p.l.Debug("Starting qdisc attachment", zap.String("interface", iface.Name))
+	p.l.Debug("Starting BPF program attachment", zap.String("interface", iface.Name), zap.Bool("tcx_supported", p.tcxSupported))
 
+	// Try TCX first if supported
+	if p.tcxSupported {
+		ingressLink, egressLink, err := p.attachTCX(iface, ifaceType)
+		if err != nil {
+			p.l.Warn("Failed to attach using TCX, falling back to traditional TC",
+				zap.String("interface", iface.Name),
+				zap.Error(err))
+			// Fall through to traditional TC attachment
+		} else {
+			// TCX attachment succeeded
+			ifaceKey := ifaceToKey(iface)
+			attachVal := &attachmentValue{
+				attachmentType: attachmentTypeTCX,
+				tcxIngressLink: ingressLink,
+				tcxEgressLink:  egressLink,
+			}
+			p.attachmentMap.Store(ifaceKey, attachVal)
+			p.l.Debug("Successfully attached BPF programs using TCX", zap.String("interface", iface.Name))
+			return
+		}
+	}
+
+	// Traditional TC attachment
 	var (
 		ingressProgram, egressProgram *ebpf.Program
 		ingressInfo, egressInfo       *ebpf.ProgramInfo
@@ -519,13 +662,14 @@ func (p *packetParser) createQdiscAndAttach(iface netlink.LinkAttrs, ifaceType i
 
 	// Cache.
 	ifaceKey := ifaceToKey(iface)
-	tcValue := &tcValue{
-		tc:    rtnl,
-		qdisc: clsactQdisc,
+	attachVal := &attachmentValue{
+		tc:             rtnl,
+		qdisc:          clsactQdisc,
+		attachmentType: attachmentTypeTC,
 	}
-	p.tcMap.Store(ifaceKey, tcValue)
+	p.attachmentMap.Store(ifaceKey, attachVal)
 
-	p.l.Debug("Successfully added bpf", zap.String("interface", iface.Name))
+	p.l.Debug("Successfully attached BPF programs using traditional TC", zap.String("interface", iface.Name))
 }
 
 func (p *packetParser) run(ctx context.Context) error {
@@ -568,6 +712,8 @@ func (p *packetParser) processRecord(ctx context.Context, id int) {
 				zap.Int("worker_id", id),
 			)
 
+			metrics.ParsedPacketsCounter.WithLabelValues().Inc()
+
 			var bpfEvent packetparserPacket
 			err := binary.Read(bytes.NewReader(record.RawSample), binary.LittleEndian, &bpfEvent)
 			if err != nil {
@@ -607,6 +753,10 @@ func (p *packetParser) processRecord(ctx context.Context, id int) {
 			// Add packet size to the flow's metadata.
 			utils.AddPacketSize(meta, bpfEvent.Bytes)
 
+			// Add previously observed byte and packet counts to the flow's metadata
+			utils.AddPreviouslyObservedBytes(meta, bpfEvent.PreviouslyObservedBytes)
+			utils.AddPreviouslyObservedPackets(meta, bpfEvent.PreviouslyObservedPackets)
+
 			// Add the TCP metadata to the flow.
 			tcpMetadata := bpfEvent.TcpMetadata
 			utils.AddTCPFlags(
@@ -617,6 +767,21 @@ func (p *packetParser) processRecord(ctx context.Context, id int) {
 				uint16((bpfEvent.Flags&TCPFlagRST)>>2), // nolint:gomnd // 2 is the offset for RST.
 				uint16((bpfEvent.Flags&TCPFlagPSH)>>3), // nolint:gomnd // 3 is the offset for PSH.
 				uint16((bpfEvent.Flags&TCPFlagURG)>>5), // nolint:gomnd // 5 is the offset for URG.
+				uint16((bpfEvent.Flags&TCPFlagECE)>>6), // nolint:gomnd // 6 is the offset for ECE.
+				uint16((bpfEvent.Flags&TCPFlagCWR)>>7), // nolint:gomnd // 7 is the offset for CWR.
+				uint16((bpfEvent.Flags&TCPFlagNS)>>8),  // nolint:gomnd // 8 is the offset for NS.
+			)
+			utils.AddPreviouslyObservedTCPFlags(
+				meta,
+				bpfEvent.PreviouslyObservedFlags.Syn,
+				bpfEvent.PreviouslyObservedFlags.Ack,
+				bpfEvent.PreviouslyObservedFlags.Fin,
+				bpfEvent.PreviouslyObservedFlags.Rst,
+				bpfEvent.PreviouslyObservedFlags.Psh,
+				bpfEvent.PreviouslyObservedFlags.Urg,
+				bpfEvent.PreviouslyObservedFlags.Ece,
+				bpfEvent.PreviouslyObservedFlags.Cwr,
+				bpfEvent.PreviouslyObservedFlags.Ns,
 			)
 
 			// For packets originating from node, we use tsval as the tcpID.
