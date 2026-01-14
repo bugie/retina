@@ -85,13 +85,15 @@ func TestCleanAll(t *testing.T) {
 		return mq
 	}
 
-	p.attachmentMap.Store(attachmentKey{"test", "test", 1}, &attachmentValue{mrtnl, &tc.Object{}, attachmentTypeTC, nil, nil})
-	p.attachmentMap.Store(attachmentKey{"test2", "test2", 2}, &attachmentValue{mrtnl, &tc.Object{}, attachmentTypeTC, nil, nil})
+	p.attachmentMap.Store(attachmentKey{"test", "test", 1}, &attachmentValue{mrtnl, &tc.Object{},
+		attachmentTypeTC, nil, nil})
+	p.attachmentMap.Store(attachmentKey{"test2", "test2", 2}, &attachmentValue{mrtnl, &tc.Object{},
+		attachmentTypeTC, nil, nil})
 
 	assert.Nil(t, p.cleanAll())
 
 	keyCount := 0
-	p.attachmentMap.Range(func(k, v interface{}) bool {
+	p.attachmentMap.Range(func(_ interface{}, _ interface{}) bool {
 		keyCount++
 		return true
 	})
@@ -227,7 +229,7 @@ func TestCreateQdiscAndAttach(t *testing.T) {
 		return mrtnl, nil
 	}
 
-	getFD = func(e *ebpf.Program) int {
+	getFD = func(_ *ebpf.Program) int {
 		return 1
 	}
 
@@ -683,7 +685,7 @@ func restoreBackup() {
 }
 
 func TestIsTCXSupported_DefaultBehavior(t *testing.T) {
-	log.SetupZapLogger(log.GetDefaultLogOpts())
+	log.SetupZapLogger(log.GetDefaultLogOpts()) // nolint:errcheck // ignore
 
 	// Save and restore the environment variable
 	originalValue := os.Getenv("RETINA_FORCE_TCX_MODE")
@@ -713,7 +715,7 @@ func TestIsTCXSupported_DefaultBehavior(t *testing.T) {
 }
 
 func TestIsTCXSupported_ForceTCXMode_NotSupported(t *testing.T) {
-	log.SetupZapLogger(log.GetDefaultLogOpts())
+	log.SetupZapLogger(log.GetDefaultLogOpts()) // nolint:errcheck // ignore
 
 	// Save and restore the environment variable
 	originalValue := os.Getenv("RETINA_FORCE_TCX_MODE")
@@ -753,7 +755,7 @@ func TestIsTCXSupported_ForceTCXMode_NotSupported(t *testing.T) {
 }
 
 func TestIsTCXSupported_ForceTCXMode_InvalidValue(t *testing.T) {
-	log.SetupZapLogger(log.GetDefaultLogOpts())
+	log.SetupZapLogger(log.GetDefaultLogOpts()) // nolint:errcheck // ignore
 
 	// Save and restore the environment variable
 	originalValue := os.Getenv("RETINA_FORCE_TCX_MODE")
@@ -783,7 +785,7 @@ func TestIsTCXSupported_ForceTCXMode_InvalidValue(t *testing.T) {
 }
 
 func TestCreateQdiscAndAttach_TCXFallback(t *testing.T) {
-	log.SetupZapLogger(log.GetDefaultLogOpts())
+	log.SetupZapLogger(log.GetDefaultLogOpts()) // nolint:errcheck // ignore
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
@@ -822,7 +824,7 @@ func TestCreateQdiscAndAttach_TCXFallback(t *testing.T) {
 		return mrtnl, nil
 	}
 
-	getFD = func(e *ebpf.Program) int {
+	getFD = func(_ *ebpf.Program) int {
 		return 1
 	}
 

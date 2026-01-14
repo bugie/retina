@@ -52,7 +52,10 @@ import (
 )
 
 //go:generate go run github.com/cilium/ebpf/cmd/bpf2go@master -cflags "-g -O2 -Wall -D__TARGET_ARCH_${GOARCH} -Wall" -target ${GOARCH} -type packet packetparser ./_cprog/packetparser.c -- -I../lib/_${GOARCH} -I../lib/common/libbpf/_src -I../lib/common/libbpf/_include/linux -I../lib/common/libbpf/_include/uapi/linux -I../lib/common/libbpf/_include/asm -I../filter/_cprog/ -I../conntrack/_cprog/
-var errNoOutgoingLinks = errors.New("could not determine any outgoing links")
+var (
+	errNoOutgoingLinks      = errors.New("could not determine any outgoing links")
+	errUnknownInterfaceType = errors.New("unknown interface type")
+)
 
 func init() {
 	registry.Add(name, New)
@@ -354,7 +357,7 @@ func (p *packetParser) cleanAll() error {
 		return nil
 	}
 
-	p.attachmentMap.Range(func(key, value interface{}) bool {
+	p.attachmentMap.Range(func(_ interface{}, value interface{}) bool {
 		v := value.(*attachmentValue)
 		if v.attachmentType == attachmentTypeTCX {
 			p.cleanTCX(v.tcxIngressLink, v.tcxEgressLink)
@@ -466,7 +469,7 @@ func (p *packetParser) attachTCX(iface netlink.LinkAttrs, ifaceType interfaceTyp
 		ingressProgram = p.objs.EndpointIngressFilter
 		egressProgram = p.objs.EndpointEgressFilter
 	default:
-		return nil, nil, fmt.Errorf("unknown interface type: %s", ifaceType)
+		return nil, nil, fmt.Errorf("%w: %s", errUnknownInterfaceType, ifaceType)
 	}
 
 	// Attach ingress program
@@ -541,7 +544,8 @@ func (p *packetParser) endpointWatcherCallbackFn(obj interface{}) {
 // If TCX is supported, it will use TCX instead of traditional TC.
 // Only support interfaces of type veth and device.
 func (p *packetParser) createQdiscAndAttach(iface netlink.LinkAttrs, ifaceType interfaceType) {
-	p.l.Debug("Starting BPF program attachment", zap.String("interface", iface.Name), zap.Bool("tcx_supported", p.tcxSupported))
+	p.l.Debug("Starting BPF program attachment", zap.String("interface", iface.Name),
+		zap.Bool("tcx_supported", p.tcxSupported))
 
 	// Try TCX first if supported
 	if p.tcxSupported {
