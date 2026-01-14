@@ -438,13 +438,29 @@ func (p *packetParser) isTCXSupported() bool {
 
 	// Try to attach a TCX program to check support
 	// We'll use the endpoint ingress program for testing
-	testLink, err := link.AttachTCX(link.TCXOptions{
-		Program:   p.objs.EndpointIngressFilter,
-		Attach:    ebpf.AttachTCXIngress,
-		Interface: loopback.Attrs().Index,
-	})
-	if err != nil {
-		p.l.Warn("TCX not supported on this system (kernel 6.6+ required), falling back to traditional TC", zap.Error(err))
+	if p.objs == nil || p.objs.EndpointIngressFilter == nil {
+		p.l.Warn("BPF objects not initialized, falling back to traditional TC")
+		return false
+	}
+
+	// Wrap AttachTCX in a recover to handle panics from invalid/uninitialized programs
+	var testLink link.Link
+	var attachErr error
+	func() {
+		defer func() {
+			if r := recover(); r != nil {
+				p.l.Warn("BPF program not properly loaded (invalid FD), falling back to traditional TC")
+				attachErr = fmt.Errorf("program not loaded: %v", r)
+			}
+		}()
+		testLink, attachErr = link.AttachTCX(link.TCXOptions{
+			Program:   p.objs.EndpointIngressFilter,
+			Attach:    ebpf.AttachTCXIngress,
+			Interface: loopback.Attrs().Index,
+		})
+	}()
+	if attachErr != nil {
+		p.l.Warn("TCX not supported on this system (kernel 6.6+ required), falling back to traditional TC", zap.Error(attachErr))
 		return false
 	}
 
