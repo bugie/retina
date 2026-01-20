@@ -55,6 +55,7 @@ import (
 var (
 	errNoOutgoingLinks      = errors.New("could not determine any outgoing links")
 	errUnknownInterfaceType = errors.New("unknown interface type")
+	errProgramNotLoaded     = errors.New("BPF program not loaded")
 )
 
 func init() {
@@ -450,7 +451,7 @@ func (p *packetParser) isTCXSupported() bool {
 		defer func() {
 			if r := recover(); r != nil {
 				p.l.Warn("BPF program not properly loaded (invalid FD), falling back to traditional TC")
-				attachErr = fmt.Errorf("program not loaded: %v", r)
+				attachErr = fmt.Errorf("program not loaded: %v: %w", r, errProgramNotLoaded)
 			}
 		}()
 		testLink, attachErr = link.AttachTCX(link.TCXOptions{
@@ -460,7 +461,8 @@ func (p *packetParser) isTCXSupported() bool {
 		})
 	}()
 	if attachErr != nil {
-		p.l.Warn("TCX not supported on this system (kernel 6.6+ required), falling back to traditional TC", zap.Error(attachErr))
+		p.l.Warn("TCX not supported on this system (kernel 6.6+ required), falling back to traditional TC",
+		  zap.Error(attachErr))
 		return false
 	}
 
@@ -474,7 +476,9 @@ func (p *packetParser) isTCXSupported() bool {
 
 // attachTCX attaches BPF programs using TCX (TC eXpress).
 // Returns ingress link, egress link, and error.
-func (p *packetParser) attachTCX(iface netlink.LinkAttrs, ifaceType interfaceType) (link.Link, link.Link, error) {
+func (p *packetParser) attachTCX(iface netlink.LinkAttrs, ifaceType interfaceType) (ingressLink link.Link, 
+	egressLink link.Link, err error) {
+	
 	var ingressProgram, egressProgram *ebpf.Program
 
 	switch ifaceType {
@@ -489,7 +493,7 @@ func (p *packetParser) attachTCX(iface netlink.LinkAttrs, ifaceType interfaceTyp
 	}
 
 	// Attach ingress program
-	ingressLink, err := link.AttachTCX(link.TCXOptions{
+	ingressLink, err = link.AttachTCX(link.TCXOptions{
 		Program:   ingressProgram,
 		Attach:    ebpf.AttachTCXIngress,
 		Interface: iface.Index,
@@ -500,7 +504,7 @@ func (p *packetParser) attachTCX(iface netlink.LinkAttrs, ifaceType interfaceTyp
 	}
 
 	// Attach egress program
-	egressLink, err := link.AttachTCX(link.TCXOptions{
+	egressLink, err = link.AttachTCX(link.TCXOptions{
 		Program:   egressProgram,
 		Attach:    ebpf.AttachTCXEgress,
 		Interface: iface.Index,

@@ -85,10 +85,14 @@ func TestCleanAll(t *testing.T) {
 		return mq
 	}
 
-	p.attachmentMap.Store(attachmentKey{"test", "test", 1}, &attachmentValue{mrtnl, &tc.Object{},
-		attachmentTypeTC, nil, nil})
-	p.attachmentMap.Store(attachmentKey{"test2", "test2", 2}, &attachmentValue{mrtnl, &tc.Object{},
-		attachmentTypeTC, nil, nil})
+	p.attachmentMap.Store(attachmentKey{"test", "test", 1}, &attachmentValue{
+		mrtnl, &tc.Object{},
+		attachmentTypeTC, nil, nil,
+	})
+	p.attachmentMap.Store(attachmentKey{"test2", "test2", 2}, &attachmentValue{
+		mrtnl, &tc.Object{},
+		attachmentTypeTC, nil, nil,
+	})
 
 	assert.Nil(t, p.cleanAll())
 
