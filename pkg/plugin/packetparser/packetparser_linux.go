@@ -462,7 +462,7 @@ func (p *packetParser) isTCXSupported() bool {
 	}()
 	if attachErr != nil {
 		p.l.Warn("TCX not supported on this system (kernel 6.6+ required), falling back to traditional TC",
-		  zap.Error(attachErr))
+			zap.Error(attachErr))
 		return false
 	}
 
@@ -476,9 +476,9 @@ func (p *packetParser) isTCXSupported() bool {
 
 // attachTCX attaches BPF programs using TCX (TC eXpress).
 // Returns ingress link, egress link, and error.
-func (p *packetParser) attachTCX(iface netlink.LinkAttrs, ifaceType interfaceType) (ingressLink link.Link, 
+func (p *packetParser) attachTCX(iface netlink.LinkAttrs, ifaceType interfaceType) (ingressLink link.Link,
 	egressLink link.Link, err error) {
-	
+
 	var ingressProgram, egressProgram *ebpf.Program
 
 	switch ifaceType {

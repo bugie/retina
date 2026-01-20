@@ -704,7 +704,7 @@ func TestIsTCXSupported_DefaultBehavior(t *testing.T) {
 	// Ensure the env var is not set
 	os.Unsetenv("RETINA_FORCE_TCX_MODE")
 
-	pObj := &packetparserObjects{} //nolint:typecheck
+	pObj := &packetparserObjects{} //nolint:typecheck // packetparserObjects is generated code
 	pObj.EndpointIngressFilter = &ebpf.Program{}
 
 	p := &packetParser{
@@ -734,7 +734,7 @@ func TestIsTCXSupported_ForceTCXMode_NotSupported(t *testing.T) {
 	// Set the env var to force TCX mode
 	os.Setenv("RETINA_FORCE_TCX_MODE", "true")
 
-	pObj := &packetparserObjects{} //nolint:typecheck
+	pObj := &packetparserObjects{} //nolint:typecheck // packetparserObjects is generated code
 	pObj.EndpointIngressFilter = &ebpf.Program{}
 
 	p := &packetParser{
@@ -774,7 +774,7 @@ func TestIsTCXSupported_ForceTCXMode_InvalidValue(t *testing.T) {
 	// Set the env var to an invalid value (not "true")
 	os.Setenv("RETINA_FORCE_TCX_MODE", "false")
 
-	pObj := &packetparserObjects{} //nolint:typecheck
+	pObj := &packetparserObjects{} //nolint:typecheck // packetparserObjects is generated code
 	pObj.EndpointIngressFilter = &ebpf.Program{}
 
 	p := &packetParser{
@@ -832,7 +832,7 @@ func TestCreateQdiscAndAttach_TCXFallback(t *testing.T) {
 		return 1
 	}
 
-	pObj := &packetparserObjects{} //nolint:typecheck
+	pObj := &packetparserObjects{} //nolint:typecheck // packetparserObjects is generated code
 	pObj.EndpointIngressFilter = &ebpf.Program{}
 	pObj.EndpointEgressFilter = &ebpf.Program{}
 	pObj.HostIngressFilter = &ebpf.Program{}
