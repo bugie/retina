@@ -120,14 +120,14 @@ setup-envtest: $(ENVTEST)
 all: generate
 
 generate: generate-bpf-go
-	go generate ./...
+	TARGET_GOARCH=$$(go env GOARCH) go generate ./...
 	for dir in $(GENERATE_TARGET_DIRS); do \
 			make -C $$dir $@; \
 	done
 
 generate-bpf-go: ## generate ebpf wrappers for plugins for all archs
 	for arch in $(ALL_ARCH.linux); do \
-        GOARCH=$$arch go generate ./pkg/plugin/...; \
+        TARGET_GOARCH=$$arch go generate ./pkg/plugin/...; \
     done
 	
 .PHONY: all generate generate-bpf-go
@@ -155,7 +155,7 @@ retina: ## builds retina binary
 	$(MAKE) retina-binary 
 
 retina-binary: ## build the Retina binary
-	go generate ./... && \
+	TARGET_GOARCH=$$(go env GOARCH) go generate ./... && \
 	go build -v -o $(RETINA_BUILD_DIR)/retina$(EXE_EXT) -gcflags="-dwarflocationlists=true" -ldflags "-X github.com/microsoft/retina/internal/buildinfo.Version=$(TAG) -X github.com/microsoft/retina/internal/buildinfo.ApplicationInsightsID=$(APP_INSIGHTS_ID)" $(RETINA_DIR)/main.go
 
 retina-capture-workload: ## build the Retina capture workload
